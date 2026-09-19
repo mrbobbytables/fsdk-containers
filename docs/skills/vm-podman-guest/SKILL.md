@@ -71,7 +71,7 @@ podman-vm-<arch>.spdx.json
 The URL is predictable from the version and the architecture:
 `https://github.com/projectbluefin/fsdk-containers/releases/download/v<fsdk-version>/donate-clanker-vm-<fsdk-version>-<arch>.raw.zst`.
 This is the shape downstream consumers (`projectbluefin/donate-clanker`,
-`projectbluefin/review`) fetch: download `.raw.zst`, decompress, then
+and planned consumer `projectbluefin/review`) fetch: download `.raw.zst`, decompress, then
 `sha256sum -c` the `.raw.sha256` sidecar. Do not rename these assets without
 changing the launcher.
 
@@ -112,9 +112,11 @@ transaction with explicit safety guarantees:
   release tag, the publish step exits with status 0 without re-uploading (`complete
   point-release asset set already published, immutable`). Complete sets are never
   overwritten.
-- **Rollback:** Maintains an `uploaded=()` list and an EXIT trap (`rollback()`). If any
+- **Rollback:** Maintains an `uploaded=()` list and an ERR trap (`rollback()`). If any
   upload or verification step fails, all assets uploaded during that invocation are
   deleted from the release so a failed run never leaves orphan checksums or disks.
+  A cancelled run (SIGINT/SIGTERM) does not fire the ERR trap; the Repair step above
+  is what clears that debris on the next publish.
 - **Post-verify:** Re-reads the release asset inventory after upload and asserts that
   every expected asset is present with its expected byte size. Any mismatch triggers
   rollback and exits non-zero.
