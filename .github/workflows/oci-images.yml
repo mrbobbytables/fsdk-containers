@@ -32,6 +32,9 @@ permissions: {}
 
 jobs:
   build:
+    outputs:
+      digest_x86_64: ${{ steps.staging-digest.outputs.digest_x86_64 }}
+      digest_aarch64: ${{ steps.staging-digest.outputs.digest_aarch64 }}
     strategy:
       fail-fast: false
       matrix:
@@ -70,6 +73,18 @@ jobs:
       - name: Publish architecture image
         if: github.event_name != 'repository_dispatch'
         run: BUILD_IMAGE_NAME=${{ inputs.image }} just tag-push "${BUILD_IMAGE_REGISTRY}/${{ inputs.image }}-${{ matrix.arch }}"
+      - name: Record staging digest
+        if: github.event_name != 'repository_dispatch'
+        id: staging-digest
+        run: |
+          set -euo pipefail
+          POINT_TAG="$(just tags | tail -1)"
+          DIGEST=$(skopeo inspect --no-tags \
+            --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+            "docker://${BUILD_IMAGE_REGISTRY}/${{ inputs.image }}-${{ matrix.arch }}:${POINT_TAG}" \
+            | jq -r '.Digest')
+          [ -n "${DIGEST}" ] && [ "${DIGEST}" != "null" ]
+          echo "digest_${{ matrix.arch }}=${DIGEST}" >> "$GITHUB_OUTPUT"
 
   manifest:
     outputs:
@@ -125,13 +140,21 @@ jobs:
           IMAGE="${{ inputs.image }}"
           REPO="${BUILD_IMAGE_REGISTRY}/${IMAGE}"
 
-          # Check which per-architecture images were successfully built and published
+          # Verify each staging digest against the build job's record before use
           POINT_TAG="$(just tags | tail -1)"
+          declare -A EXPECTED_DIGEST=(
+            [x86_64]="${{ needs.build.outputs.digest_x86_64 }}"
+            [aarch64]="${{ needs.build.outputs.digest_aarch64 }}"
+          )
           AVAIL_ARCHS=()
           for arch in x86_64 aarch64; do
-            if skopeo inspect --no-tags --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" "docker://${REPO}-${arch}:${POINT_TAG}" >/dev/null 2>&1; then
-              AVAIL_ARCHS+=("${arch}")
+            ACTUAL=$(skopeo inspect --no-tags --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+              "docker://${REPO}-${arch}:${POINT_TAG}" | jq -r '.Digest')
+            if [ -z "${EXPECTED_DIGEST[$arch]}" ] || [ "${ACTUAL}" != "${EXPECTED_DIGEST[$arch]}" ]; then
+              echo "ERROR: staging digest mismatch for ${REPO}-${arch}:${POINT_TAG} (expected ${EXPECTED_DIGEST[$arch]:-unset}, found ${ACTUAL}) — refusing to sign" >&2
+              exit 1
             fi
+            AVAIL_ARCHS+=("${arch}")
           done
 
           if [ ${#AVAIL_ARCHS[@]} -ne 2 ]; then
@@ -139,7 +162,7 @@ jobs:
             exit 1
           fi
 
-          echo "==> Found per-architecture images for ${IMAGE} at ${POINT_TAG}: ${AVAIL_ARCHS[*]}"
+          echo "==> Verified per-architecture staging digests for ${IMAGE} at ${POINT_TAG}: ${AVAIL_ARCHS[*]}"
 
           # Harvest the OCI + ArtifactHub labels baked into the per-arch image
           # config (elements/oci/*.bst + `just export`). GHCR renders the
@@ -151,7 +174,7 @@ jobs:
           # assembled with `docker buildx imagetools create --annotation
           # index:...` instead (docker CLI reuses the GHCR credentials the
           # login step wrote to ~/.docker/config.json).
-          INDEX_LABELS="$(skopeo inspect --no-tags --config --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" "docker://${REPO}-x86_64:${POINT_TAG}" \
+          INDEX_LABELS="$(skopeo inspect --no-tags --config --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" "docker://${REPO}-x86_64@${EXPECTED_DIGEST[x86_64]}" \
             | jq -r '.config.Labels // {} | to_entries[]
                      | select(.key | startswith("org.opencontainers.image.") or startswith("io.artifacthub.package."))
                      | "\(.key)=\(.value)"')"
@@ -173,7 +196,7 @@ jobs:
             fi
             SOURCES=()
             for arch in "${AVAIL_ARCHS[@]}"; do
-              SOURCES+=("${REPO}-${arch}:${t}")
+              SOURCES+=("${REPO}-${arch}@${EXPECTED_DIGEST[$arch]}")
             done
 
             # Promote every harvested label to an index annotation, plus
