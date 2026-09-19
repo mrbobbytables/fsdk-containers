@@ -32,9 +32,6 @@ permissions: {}
 
 jobs:
   build:
-    outputs:
-      digest_x86_64: ${{ steps.staging-digest.outputs.digest_x86_64 }}
-      digest_aarch64: ${{ steps.staging-digest.outputs.digest_aarch64 }}
     strategy:
       fail-fast: false
       matrix:
@@ -75,16 +72,23 @@ jobs:
         run: BUILD_IMAGE_NAME=${{ inputs.image }} just tag-push "${BUILD_IMAGE_REGISTRY}/${{ inputs.image }}-${{ matrix.arch }}"
       - name: Record staging digest
         if: github.event_name != 'repository_dispatch'
-        id: staging-digest
         run: |
           set -euo pipefail
+          mkdir -p /tmp/staging-digest
           POINT_TAG="$(just tags | tail -1)"
           DIGEST=$(skopeo inspect --no-tags \
             --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
             "docker://${BUILD_IMAGE_REGISTRY}/${{ inputs.image }}-${{ matrix.arch }}:${POINT_TAG}" \
             | jq -r '.Digest')
           [ -n "${DIGEST}" ] && [ "${DIGEST}" != "null" ]
-          echo "digest_${{ matrix.arch }}=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "${DIGEST}" > "/tmp/staging-digest/${{ matrix.arch }}"
+      - name: Upload staging digest artifact
+        if: github.event_name != 'repository_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: staging-digest-${{ matrix.arch }}
+          path: /tmp/staging-digest/${{ matrix.arch }}
+          retention-days: 1
 
   manifest:
     outputs:
@@ -133,6 +137,13 @@ jobs:
       - name: Generate BuildStream-native SBOM
         run: just sbom "${{ inputs.image }}"
 
+      - name: Download staging digest artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: staging-digest-*
+          merge-multiple: true
+          path: /tmp/staging-digests
+
       - name: Assemble multi-arch manifest, sign, and attach SBOM
         id: resolve-digest
         run: |
@@ -142,15 +153,17 @@ jobs:
 
           # Verify each staging digest against the build job's record before use
           POINT_TAG="$(just tags | tail -1)"
-          declare -A EXPECTED_DIGEST=(
-            [x86_64]="${{ needs.build.outputs.digest_x86_64 }}"
-            [aarch64]="${{ needs.build.outputs.digest_aarch64 }}"
-          )
+          declare -A EXPECTED_DIGEST
+          for arch in x86_64 aarch64; do
+            if [ -f "/tmp/staging-digests/${arch}" ]; then
+              EXPECTED_DIGEST[$arch]="$(cat "/tmp/staging-digests/${arch}")"
+            fi
+          done
           AVAIL_ARCHS=()
           for arch in x86_64 aarch64; do
             ACTUAL=$(skopeo inspect --no-tags --creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
               "docker://${REPO}-${arch}:${POINT_TAG}" | jq -r '.Digest')
-            if [ -z "${EXPECTED_DIGEST[$arch]}" ] || [ "${ACTUAL}" != "${EXPECTED_DIGEST[$arch]}" ]; then
+            if [ -z "${EXPECTED_DIGEST[$arch]:-}" ] || [ "${ACTUAL}" != "${EXPECTED_DIGEST[$arch]}" ]; then
               echo "ERROR: staging digest mismatch for ${REPO}-${arch}:${POINT_TAG} (expected ${EXPECTED_DIGEST[$arch]:-unset}, found ${ACTUAL}) — refusing to sign" >&2
               exit 1
             fi
