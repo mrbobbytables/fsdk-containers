@@ -153,6 +153,26 @@ push, sign, attest, or release step anywhere in them. Gating publication with
 an `if:` inside a shared job means one edit away from a fork PR publishing to
 GHCR; gating it by *not having the code path* does not. Keep it that way.
 
+### Test-gate coverage counts `run: just <recipe>`
+
+`tests/test_catalog_gate_coverage.py` proves every `tests/test_*.py` is really
+executed somewhere. A workflow reaches the Python suite in two ways and both
+count: spelling the `unittest discover` invocation itself, as
+`image-catalog.yml` and `skill-catalog.yml` do, or `run: just <recipe>` and
+letting the recipe spell it, as `pr-guest-contract` does with
+`just podman-vm-check`. Recipe names are resolved against the `Justfile`
+transitively across recipe dependencies, so adding a `run: just` step is a
+legitimate way to close a coverage hole — not only a literal discovery step.
+
+That model reads workflow *text* and does not evaluate a job's `if:`, so a
+recipe invoked only from a conditional job still scores as covered. Close that
+gap in `elements/targets.json` rather than in the model: `vm_guest_paths` lists
+`tests/test_donate_clanker_bootstrap.py` itself, because `pr-guest-contract` is
+the only job that runs it and that job is skipped unless `vm_guest` is
+selected. A new test module reachable only from a path-gated job needs the same
+entry, and `test_vm_guest_paths_select_every_module_its_job_runs` fails if it
+is missing.
+
 ### Automation tokens — everything that writes uses Mergeraptor
 
 Neither a push nor a PR made with the default `GITHUB_TOKEN` triggers another
@@ -268,10 +288,12 @@ skipped entirely when no tags are pushed.
 
 The `podman-vm` release assets follow the same immutability shape one level
 up: there is no rolling equivalent at all (GitHub Release assets
-are inherently tied to their tag), and `just publish-podman-vm` guards
-re-uploads with a `gh release view --json assets` existence check, skipping
-an asset name that's already published on that tag instead of overwriting
-it. See [vm-podman-guest](../../vm-podman-guest/SKILL.md).
+are inherently tied to their tag), and `just publish-podman-vm` publishes
+an architecture's asset set as an all-or-nothing transaction with preflight
+size checks, cleanup of partial/orphaned sets, immutability skipping for complete
+sets, rollback on failure, and post-verification. An aggregate `verify-release`
+job enforces that both architectures publish their complete asset sets.
+See [vm-podman-guest](../../vm-podman-guest/SKILL.md).
 
 Set `fail-fast: false` on image and architecture matrices to prevent a single
 container build failure from canceling unrelated container builds.
