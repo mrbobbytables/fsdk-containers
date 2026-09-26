@@ -21,8 +21,9 @@ with two differences:
 
 cups-base/cups/cups-daemon-only switch TLS to gnutls and enable libusb,
 libcupsfilters and cups-filters gain the printer-app source patches, and
-ghostscript builds its bundled zlib. None of these elements are in the
-graph of any other fsdk-containers target.
+ghostscript builds its bundled zlib, drops X11/xorg-lib-xt, and stops
+building GhostPDL's gpcl6 and gxps binaries. None of these elements are
+in the graph of any other fsdk-containers target.
 
 Upstream-Status: Inappropriate [downstream appliance configuration]
 Exit condition: Permanent while the printer applications consume
@@ -34,9 +35,9 @@ fsdk-containers' printing base; re-check every hunk on a junction bump.
  elements/components/cups-daemon-only.bst      |  1 +
  elements/components/cups-filters.bst          |  2 ++
  elements/components/cups.bst                  |  2 +-
- elements/components/ghostscript.bst           |  2 +-
+ elements/components/ghostscript.bst           |  7 +++++--
  elements/components/libcupsfilters.bst        |  2 ++
- 8 files changed, 58 insertions(+), 4 deletions(-)
+ 8 files changed, 63 insertions(+), 5 deletions(-)
  create mode 100644 elements/components/_private/avahi-printing-base.bst
  create mode 100644 elements/components/avahi-printing.bst
 
@@ -166,15 +167,25 @@ index 8d3b185..0c0d570 100644
  config:
    include:
 diff --git a/elements/components/ghostscript.bst b/elements/components/ghostscript.bst
-index ed426a5..b378431 100644
+index ed426a5..93790df 100644
 --- a/elements/components/ghostscript.bst
 +++ b/elements/components/ghostscript.bst
-@@ -22,7 +22,7 @@ variables:
+@@ -16,13 +16,16 @@ depends:
+ - components/libpng.bst
+ - components/libtiff.bst
+ - components/openjpeg.bst
+-- components/xorg-lib-xt.bst
+ 
+ variables:
    conf-local: >-
      --with-drivers=ALL
      --with-system-libtiff=yes
 -    --with-local-zlib=no
 +    --with-local-zlib=yes
++    --without-x
++    --without-pcl
++    --without-xps
++    --without-gpdl
  
  config:
    configure-commands:

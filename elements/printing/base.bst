@@ -2,7 +2,7 @@ kind: stack
 description: Shared printing base for the projectbluefin printer applications (devel).
 
 # The one CUPS provider for every printer application: CUPS, cups-filters,
-# libcupsfilters, libppd, ghostscript, mutool, the nonroot avahi-daemon, and
+# libcupsfilters, libppd, ghostscript, the nonroot avahi-daemon, and
 # PAPPL + pappl-retrofit. The CUPS/avahi/ghostscript customizations come from
 # patches/freedesktop-sdk/0002-printing-*.patch.
 #
@@ -17,6 +17,5 @@ depends:
 - freedesktop-sdk.bst:components/ghostscript.bst
 - freedesktop-sdk.bst:components/libcupsfilters.bst
 - freedesktop-sdk.bst:components/libppd.bst
-- freedesktop-sdk.bst:components/mutool.bst
 - printing/pappl.bst
 - printing/pappl-retrofit.bst

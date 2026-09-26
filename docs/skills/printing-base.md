@@ -1,7 +1,7 @@
 ---
 name: printing-base
-version: "1.2"
-last_updated: 2026-09-26
+version: "1.3"
+last_updated: 2026-09-27
 id: printing-base
 one_line_purpose: Build, publish, and consume the shared printing base (printing/base.bst) for the printer applications.
 entry_point: docs/skills/printing-base.md
@@ -28,15 +28,26 @@ applications (ghostscript, gutenprint, hplip, ps). It is a `kind: stack` of:
 |---|---|
 | `freedesktop-sdk.bst:components/cups-daemon-only.bst` (+ `cups.bst`) | FSDK, patched |
 | `freedesktop-sdk.bst:components/cups-filters.bst`, `libcupsfilters.bst` | FSDK, patched |
-| `freedesktop-sdk.bst:components/ghostscript.bst` | FSDK, patched |
-| `freedesktop-sdk.bst:components/libppd.bst`, `mutool.bst` | FSDK |
+| `freedesktop-sdk.bst:components/ghostscript.bst` | FSDK, patched (headless `--without-x`, no GhostPDL PCL/XPS) |
+| `freedesktop-sdk.bst:components/libppd.bst` | FSDK |
 | `freedesktop-sdk.bst:components/avahi-printing.bst` | added by the patch |
 | `printing/pappl.bst` (tag pin), `printing/pappl-retrofit.bst` (commit pin) | this repo |
+
+Opt-in elements outside `base.bst`:
+- `printing/foomatic-db.bst`: FSDK `components/foomatic-db.bst` stack. Built
+  against the patched CUPS. Deliberately not in `base.bst`: only applications
+  that ship PPDs (ghostscript, ps) depend on it.
+- `printing/mutool.bst`: FSDK `components/mutool.bst` stack. Moved out of
+  `base.bst` to avoid shipping ~39 MiB into every appliance. Applications that
+  prove a job needs the MuPDF renderer (`cfFilterMuPDFToPWG`) can depend on
+  `fsdk-containers.bst:printing/mutool.bst` explicitly.
 
 The customizations are `patches/freedesktop-sdk/0002-printing-*.patch`
 (ghostscript-printer-app's `0001-customize-cups-for-printer-application.patch`
 at the same FSDK pin) plus the source patch queues in `patches/printing/`,
-staged into the junction by `elements/freedesktop-sdk.bst`.
+staged into the junction by `elements/freedesktop-sdk.bst`. Ghostscript is
+built without X11 (`--without-x`, dropping `xorg-lib-xt.bst`) and without
+GhostPDL's PCL/XPS binaries (`--without-pcl`, `--without-xps`, `--without-gpdl`).
 
 ## Why no other image's cache key moves
 
@@ -158,7 +169,6 @@ has no catalog record.
          -o -name '*.a' -o -name '*.la' -o -type d -name pkgconfig -o -type d -name cmake \) -print -quit)"
    [ -z "${bad}" ] || { echo "devel content in ${IMAGE}: ${bad}" >&2; exit 1; }
    ```
-
 6. Apply the shared slim recipe and keep its gate. Include
    `include/slim-printing.yml` across the junction in the OCI script
    element and run its two variables before `build-oci`:
@@ -201,6 +211,19 @@ has no catalog record.
    Put the app's own removals in the OCI element *after* the shared recipe
    and pair each with a line in the app's own forbidden list, never by
    editing the shared one.
+7. Add a forbidden-path check to `just verify`. Enforce that interpreters and
+   renderers never executed by the appliance (`gpcl6`, `gxps`, `mutool`) and
+   Ghostscript's X11 toolkit dependency (`libXt`) are absent from the runtime rootfs:
+
+   ```bash
+   bad="$(cd "${root}" && find . \( -name gpcl6 -o -name gxps -o -name mutool -o -name 'libXt.so*' \) -print -quit)"
+   [ -z "${bad}" ] || { echo "forbidden binary/library in ${IMAGE}: ${bad}" >&2; exit 1; }
+   ```
+
+   Note that `libX11` remains in the runtime closure through cairo (needed by
+   poppler, cups-filters, and HPLIP's pycairo), so `libX11.so*` is not forbidden
+   here. Configuring Ghostscript `--without-x` removes its direct X11 link
+   and drops `xorg-lib-xt` (`libXt.so*`).
 
 ## Shared slim recipe — `include/slim-printing.yml`
 
@@ -241,7 +264,7 @@ What the shared recipe deliberately does **not** touch, because at least one
 app needs it: `libcairo`/`libpixman`/`libgio`/`libgobject`/`libgirepository`
 (HPLIP's pygobject + pycairo), `libgcrypt` and `libsqlite3` (HPLIP's gpg),
 poppler's CLIs (`pdftops` is cups-filters' hybrid renderer), `libX11`
-(Ghostscript's X devices, #340), `usr/share/locale` (gutenprint keeps the
+(pulled by cairo for poppler/cups-filters and pycairo; Ghostscript's direct X devices dropped in #340), `usr/share/locale` (gutenprint keeps the
 domain for translated PPDs), `usr/share/misc/magic.mgc` (`file`, ghostscript
 only), perl and `which` (HPLIP). Those are per-app removals for the app's own
 OCI element. glibc NSS modules, p11-kit trust modules, OpenSSL providers and
